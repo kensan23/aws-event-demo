@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Sample SAM Template for stream-app
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 10
+
+Resources:
+  MySQSLambdaFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      FunctionName: event-demo-sqs-function
+      CodeUri: ./src/SqsHandler/
+      Handler: SqsHandler::SqsHandler.Handler::FunctionHandler
+      Runtime: dotnetcore3.1
+      Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
+        Variables:
+          PARAM1: VALUE
+      Events:
+        HelloWorld:
+          Type: SQS # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Queue: !GetAtt MyQueue.Arn
+            BatchSize: 10
+    Policies:
+      - SQSPollerPolicy:
+          QueueName:
+            !GetAtt MyQueue.QueueName
+  MyQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: "topic-event-demo"
+      Tags:
+
+  MyTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: "topic-event-demo"
+
+  myQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref MyQueue
+      PolicyDocument:
+        Statement:
+          Effect: Allow
+          Principal: "*"
+          Action: "sqs:*"
+          Resource: !GetAtt MyQueue.Arn
+          Condition:
+            ArnEquals:
+              "aws:SourceArn": !Ref MyTopic
+  myQueueToSnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt MyQueue.Arn
+      Protocol: sqs
+      RawMessageDelivery: true
+      TopicArn: !Ref MyTopic
+      FilterPolicy:
+        colour:
+          - red
+          - web
+
+  KinesisFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: event-demo-event-function
+      CodeUri: ./src/KinesisConsumer/
+      Handler: KinesisConsumer::KinesisConsumer.Handler::FunctionHandler
+      Runtime: dotnetcore3.1
+      Timeout: 10
+      Events:
+        Stream:
+          Type: Kinesis # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
+          Properties:
+            Queue: !GetAtt stream.Arn
+            BatchSize: 100
+            StartingPosition: LATEST
+  stream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name: "event-stream-demo"
+      ShardCount: 1
+
+  EventBridgeFunction:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#awsserverlessfunction
+    Properties:
+      FunctionName: event-demo-eventbridge-function
+      CodeUri: ./src/EventBridgeConsumer/
+      Handler: EventBridgeConsumer::EventBridgeConsumer.Handler::FunctionHandler
+      Runtime: dotnetcore3.1
+      Environment: # More info about Env Vars: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#environment-object
+        Variables:
+          PARAM1: VALUE
+
+  EventRuleWeb:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref commsbus
+      EventPattern:
+        source:
+          - "publisher"
+        detail:
+          channel:
+            - "web"
+            - "all"
+      State: "ENABLED"
+      Targets:
+        -
+          Arn:
+            Fn::GetAtt:
+              - "EventBridgeFunction"
+              - "Arn"
+          Id: "EventBridgeFunctionConsumer"
+  commsbus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: 'my-bus'
+  commsbusarchive:
+    Type: AWS::Events::Archive
+    Properties:
+      ArchiveName: 'my-bus-archive'
+      RetentionDays: 7
+      SourceArn: !GetAtt commsbus.Arn
+  PermissionForEventsToInvokeLambda: 
+    Type: AWS::Lambda::Permission
+    Properties: 
+      FunctionName: 
+        Ref: "EventBridgeFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: 
+        Fn::GetAtt: 
+          - "EventRuleWeb"
+          - "Arn"
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  MySnsTopic:
+    Description: "SNS arn"
+    Value: !Ref MyTopic
+  StreamARN:
+    Description: "Stream ARN"
+    Value: !GetAtt stream.Arn
